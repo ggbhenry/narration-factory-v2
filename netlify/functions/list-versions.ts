@@ -18,11 +18,8 @@ export const handler: Handler = async (event) => {
     const slug = slugify(copyId)
     const keys = await listBlobKeys(versionPrefix(slug))
 
-    const versions: NarrationVersion[] = []
-    for (const key of keys) {
-      const version = await getJSON<NarrationVersion>(key)
-      if (version) versions.push(version)
-    }
+    const raw = await Promise.all(keys.map((key) => getJSON<NarrationVersion>(key)))
+    const versions = raw.filter((v): v is NarrationVersion => !!v && !v.deleted_at)
 
     versions.sort((a, b) => parseVersionNumber(b.version_id) - parseVersionNumber(a.version_id))
 

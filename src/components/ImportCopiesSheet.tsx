@@ -3,17 +3,20 @@ import type { ChangeEvent } from 'react'
 import { apiPost } from '../lib/api.js'
 import { parseCopiesText } from '../lib/parseCopies.js'
 import { useToast } from './Toast.js'
-import type { CopyRecord, ImportCopiesResponse } from '../types/index.js'
+import type { CopyRecord, ImportCopiesResponse, VoicePreset } from '../types/index.js'
 
 interface ImportCopiesSheetProps {
+  presets: VoicePreset[]
   onClose: () => void
-  onImported: () => void
+  onImported: (copies: CopyRecord[]) => void
 }
 
-export function ImportCopiesSheet({ onClose, onImported }: ImportCopiesSheetProps) {
+export function ImportCopiesSheet({ presets, onClose, onImported }: ImportCopiesSheetProps) {
   const { showToast } = useToast()
   const [rawText, setRawText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [applyPreset, setApplyPreset] = useState(true)
+  const [presetId, setPresetId] = useState<string>(presets[0]?.id ?? '')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const { blocks, errors } = parseCopiesText(rawText)
@@ -22,9 +25,7 @@ export function ImportCopiesSheet({ onClose, onImported }: ImportCopiesSheetProp
     const file = e.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
-    reader.onload = () => {
-      setRawText(String(reader.result ?? ''))
-    }
+    reader.onload = () => setRawText(String(reader.result ?? ''))
     reader.readAsText(file, 'utf-8')
   }
 
@@ -35,15 +36,19 @@ export function ImportCopiesSheet({ onClose, onImported }: ImportCopiesSheetProp
     }
     setBusy(true)
     try {
-      const res = await apiPost<ImportCopiesResponse>('import-copies', { raw_text: rawText })
+      const res = await apiPost<ImportCopiesResponse>('import-copies', {
+        raw_text: rawText,
+        apply_preset_id: applyPreset && presetId ? presetId : null,
+      })
       const importedCount = res.imported.length
       const skippedCount = res.skipped.length
       if (importedCount > 0) {
+        // Insere as copies direto no estado do pai (sem recarregar tudo).
+        onImported(res.imported)
         showToast(
           `${importedCount} copy(ies) importada(s).${skippedCount > 0 ? ` ${skippedCount} ignorada(s).` : ''}`,
           'success',
         )
-        onImported()
         onClose()
       } else {
         showToast(`Nenhuma copy foi importada. ${res.skipped.map((s) => s.reason).join(' ')}`, 'error')
@@ -76,8 +81,8 @@ export function ImportCopiesSheet({ onClose, onImported }: ImportCopiesSheetProp
               <span>Ou cole o texto diretamente</span>
               <textarea
                 className="textarea"
-                rows={10}
-                placeholder={'=== COPY 009 ===\n\nTexto da copy aqui.\n\n(PRESET: é opcional — você pode escolher o preset depois no card)'}
+                rows={9}
+                placeholder={'=== COPY 009 ===\n\nTexto da copy aqui.\n\n(o PRESET no arquivo é opcional)'}
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
               />
@@ -89,11 +94,46 @@ export function ImportCopiesSheet({ onClose, onImported }: ImportCopiesSheetProp
               <h3>
                 {blocks.length} {blocks.length === 1 ? 'copy encontrada' : 'copies encontradas'}
               </h3>
+
+              <div className="field">
+                <span>Preset para a importação</span>
+                <div className="select-wrap">
+                  <select
+                    className="select"
+                    value={presetId}
+                    onChange={(e) => setPresetId(e.target.value)}
+                    disabled={presets.length === 0}
+                  >
+                    {presets.length === 0 && <option value="">Nenhum preset cadastrado</option>}
+                    {presets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <label className="list-controls__label" style={{ marginBottom: 14 }}>
+                <input
+                  type="checkbox"
+                  className="checkbox"
+                  checked={applyPreset && presets.length > 0}
+                  disabled={presets.length === 0}
+                  onChange={(e) => setApplyPreset(e.target.checked)}
+                />
+                Aplicar este preset às {blocks.length} copies
+              </label>
+
               <ul className="import-preview-list">
                 {blocks.map((b) => (
                   <li key={b.copy_id}>
                     <strong>{b.copy_id}</strong>
-                    {b.presets.length > 0 ? ` — ${b.presets.join(' + ')}` : ' — sem preset (escolha depois no card)'}
+                    {applyPreset && presetId
+                      ? ` — ${presets.find((p) => p.id === presetId)?.name ?? presetId}`
+                      : b.presets.length > 0
+                        ? ` — ${b.presets.join(' + ')}`
+                        : ' — sem preset (escolha depois no card)'}
                   </li>
                 ))}
               </ul>

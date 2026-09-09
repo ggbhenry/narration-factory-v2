@@ -38,6 +38,8 @@ export interface VoicePreset {
   style: number
   speed?: number
   use_speaker_boost: boolean
+  /** Se presente, o preset está na lixeira (soft delete). ISO timestamp. */
+  deleted_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -57,6 +59,8 @@ export interface CopyRecord {
    */
   next_version_number?: number
   last_error?: string | null
+  /** Se presente, a copy está na lixeira (soft delete). ISO timestamp. */
+  deleted_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -73,6 +77,8 @@ export interface NarrationVersion {
   duration_seconds: number | null
   status: VersionStatus
   error_message?: string | null
+  /** Se presente, a versão está na lixeira (soft delete). ISO timestamp. */
+  deleted_at?: string | null
   created_at: string
 }
 
@@ -131,6 +137,8 @@ export interface DeletePresetsRequest {
 
 export interface ImportCopiesRequest {
   raw_text: string
+  /** Se informado, aplica este preset a todas as copies importadas neste lote. */
+  apply_preset_id?: string | null
 }
 
 export interface ImportCopiesResponse {

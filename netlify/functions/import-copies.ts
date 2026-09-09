@@ -25,6 +25,8 @@ export const handler: Handler = async (event) => {
       )
     }
 
+    const applyPresetId = payload.apply_preset_id ? slugify(payload.apply_preset_id) : null
+
     const imported: CopyRecord[] = []
     const skipped: { copy_id: string; reason: string }[] = []
 
@@ -38,9 +40,15 @@ export const handler: Handler = async (event) => {
       const key = copyKey(slug)
       const existing = await getJSON<CopyRecord>(key)
       if (existing) {
-        skipped.push({ copy_id: block.copy_id, reason: 'Já existe uma copy com este ID. Importação ignorada para evitar sobrescrever.' })
+        const reason = existing.deleted_at
+          ? 'Já existe uma copy com este ID na Lixeira. Restaure ou exclua-a definitivamente antes de reimportar.'
+          : 'Já existe uma copy com este ID. Importação ignorada para evitar sobrescrever.'
+        skipped.push({ copy_id: block.copy_id, reason })
         continue
       }
+
+      // Preset do lote tem prioridade; senão usa o do TXT (se houver).
+      const presetForCopy = applyPresetId ?? (block.presets.length > 0 ? block.presets[0] : null)
 
       const now = nowIso()
       const record: CopyRecord = {
@@ -48,7 +56,7 @@ export const handler: Handler = async (event) => {
         copy_original: block.text,
         copy_tts: block.text,
         requested_presets: block.presets,
-        selected_preset_id: block.presets.length > 0 ? block.presets[0] : null,
+        selected_preset_id: presetForCopy,
         status: 'IMPORTED',
         master_version_id: null,
         next_version_number: 0,

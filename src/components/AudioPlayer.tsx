@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchAudioObjectUrl } from '../lib/api.js'
+import { getAudioUrl } from '../lib/audioCache.js'
 
 interface AudioPlayerProps {
   copyId: string
   versionId: string
   durationSeconds: number | null
+  autoPlay?: boolean
 }
 
 /**
- * O <audio src> nativo não consegue enviar nosso header X-App-Token,
- * então este componente busca o MP3 autenticado via fetch, cria um
- * Object URL e o usa como fonte. Funciona bem no Safari do iPhone.
+ * O <audio src> nativo não consegue enviar nosso header X-App-Token, então
+ * buscamos o MP3 autenticado e usamos um Object URL como fonte. O download é
+ * feito através do cache de sessão (audioCache): a mesma versão só baixa uma
+ * vez; reabrir é instantâneo. Por isso este componente NÃO revoga o URL ao
+ * desmontar — quem controla o ciclo de vida é o cache.
  */
-export function AudioPlayer({ copyId, versionId, durationSeconds }: AudioPlayerProps) {
+export function AudioPlayer({ copyId, versionId, durationSeconds, autoPlay }: AudioPlayerProps) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -20,19 +23,13 @@ export function AudioPlayer({ copyId, versionId, durationSeconds }: AudioPlayerP
 
   useEffect(() => {
     let cancelled = false
-    let localUrl: string | null = null
-
     setLoading(true)
     setError(null)
     setObjectUrl(null)
 
-    fetchAudioObjectUrl(copyId, versionId)
+    getAudioUrl(copyId, versionId)
       .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url)
-          return
-        }
-        localUrl = url
+        if (cancelled) return
         setObjectUrl(url)
       })
       .catch((err) => {
@@ -44,7 +41,6 @@ export function AudioPlayer({ copyId, versionId, durationSeconds }: AudioPlayerP
 
     return () => {
       cancelled = true
-      if (localUrl) URL.revokeObjectURL(localUrl)
     }
   }, [copyId, versionId])
 
@@ -53,7 +49,14 @@ export function AudioPlayer({ copyId, versionId, durationSeconds }: AudioPlayerP
       {loading && <div className="audio-player__loading">Carregando áudio…</div>}
       {error && <div className="audio-player__error">{error}</div>}
       {objectUrl && (
-        <audio ref={audioRef} controls preload="metadata" src={objectUrl} className="audio-player__el">
+        <audio
+          ref={audioRef}
+          controls
+          preload="metadata"
+          src={objectUrl}
+          autoPlay={autoPlay}
+          className="audio-player__el"
+        >
           O seu navegador não suporta reprodução de áudio.
         </audio>
       )}

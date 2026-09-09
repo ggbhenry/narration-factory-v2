@@ -38,7 +38,7 @@ export function VersionHistory({
         const actions: MenuAction[] = [
           { label: 'Ouvir / selecionar', icon: '▶', onClick: () => onSelect(v.version_id) },
           { label: 'Tornar master', icon: '★', onClick: () => onMakeMaster(v.version_id), hidden: !canMaster },
-          { label: 'Excluir permanentemente', icon: '🗑', danger: true, onClick: () => onDeleteOne(v.version_id) },
+          { label: 'Excluir (mover p/ lixeira)', icon: '🗑', danger: true, onClick: () => onDeleteOne(v.version_id) },
         ]
 
         return (

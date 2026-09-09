@@ -13,7 +13,7 @@ interface ReviewSheetProps {
   presets: VoicePreset[]
   initialTab?: 'review' | 'history'
   onClose: () => void
-  onChanged: () => void
+  onChanged: (copy?: CopyRecord) => void
 }
 
 type PendingConfirm =
@@ -81,7 +81,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
       setCopy(res.copy)
       showToast(`${selectedVersion.version_id} aprovada como master.`, 'success')
       await loadVersions(res.version.version_id)
-      onChanged()
+      onChanged(res.copy)
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Erro ao aprovar.', 'error')
     } finally {
@@ -99,7 +99,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
       })
       setCopy(res.copy)
       showToast(`${selectedVersion.version_id} rejeitada.`, 'info')
-      onChanged()
+      onChanged(res.copy)
       if (andRegenerate) {
         const genRes = await apiPost<{ copy: CopyRecord; version: NarrationVersion }>('generate', {
           copy_id: copy.copy_id,
@@ -112,7 +112,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
         setCopy(genRes.copy)
         showToast(`${genRes.version.version_id} gerada.`, 'success')
         await loadVersions(genRes.version.version_id)
-        onChanged()
+        onChanged(genRes.copy)
       } else {
         await loadVersions()
       }
@@ -130,7 +130,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
       setCopy(res.copy)
       showToast(`${versionId} agora é o master.`, 'success')
       await loadVersions(versionId)
-      onChanged()
+      onChanged(res.copy)
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Erro ao tornar master.', 'error')
     } finally {
@@ -147,9 +147,9 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
           : { copy_id: copy.copy_id, version_ids: versionIds }
       const res = await apiPost<{ copy: CopyRecord }>('delete-versions', body)
       setCopy(res.copy)
-      showToast(versionIds === 'all' ? 'Histórico limpo.' : 'Versões excluídas.', 'success')
+      showToast(versionIds === 'all' ? 'Histórico movido para a lixeira.' : 'Versões movidas para a lixeira.', 'success')
       await loadVersions()
-      onChanged()
+      onChanged(res.copy)
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Erro ao excluir.', 'error')
     } finally {
@@ -278,7 +278,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
             setCopy(updatedCopy)
             setShowEdit(false)
             await loadVersions(newVersion.version_id)
-            onChanged()
+            onChanged(updatedCopy)
           }}
         />
       )}
@@ -286,7 +286,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
       {confirm?.kind === 'delete-selected' && (
         <ConfirmDialog
           title={`Excluir ${confirm.count} ${confirm.count > 1 ? 'versões' : 'versão'}?`}
-          message="Esta ação apagará permanentemente os áudios e não poderá ser desfeita."
+          message="As versões vão para a Lixeira (o áudio é preservado). Você pode restaurar depois."
           confirmLabel={`Excluir ${confirm.count}`}
           busy={busy}
           onConfirm={() => doDelete(Array.from(checkedIds))}
@@ -296,7 +296,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
       {confirm?.kind === 'clear-history' && (
         <ConfirmDialog
           title="Limpar todo o histórico?"
-          message="Todas as versões e áudios desta copy serão apagados permanentemente. A copy continua existindo e pode gerar novas narrações. A numeração não recomeça do zero."
+          message="Todas as versões vão para a Lixeira. A copy continua existindo e pode gerar novas narrações. A numeração não recomeça do zero, e você pode restaurar as versões depois."
           confirmLabel="Limpar histórico"
           busy={busy}
           onConfirm={() => doDelete('all')}
@@ -306,7 +306,7 @@ export function ReviewSheet({ copy: initialCopy, presets, initialTab = 'review',
       {confirm?.kind === 'delete-one' && (
         <ConfirmDialog
           title={`Excluir ${confirm.versionId}?`}
-          message="Esta versão e seu áudio serão apagados permanentemente."
+          message="Esta versão vai para a Lixeira (o áudio é preservado). Você pode restaurar depois."
           confirmLabel="Excluir"
           busy={busy}
           onConfirm={() => doDelete([confirm.versionId])}

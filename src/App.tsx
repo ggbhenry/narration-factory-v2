@@ -4,7 +4,9 @@ import { AppShell } from './components/AppShell.js'
 import type { AppPage } from './components/AppShell.js'
 import { ToastProvider } from './components/Toast.js'
 import { NarrationsPage } from './pages/NarrationsPage.js'
+import { HistoryPage } from './pages/HistoryPage.js'
 import { PresetsPage } from './pages/PresetsPage.js'
+import { TrashPage } from './pages/TrashPage.js'
 import { clearStoredToken, getStoredToken } from './lib/auth.js'
 
 export default function App() {
@@ -26,7 +28,10 @@ export default function App() {
         <LoginGate onAuthenticated={() => setAuthenticated(true)} />
       ) : (
         <AppShell page={page} onNavigate={setPage}>
-          {page === 'narrations' ? <NarrationsPage /> : <PresetsPage />}
+          {page === 'narrations' && <NarrationsPage />}
+          {page === 'history' && <HistoryPage />}
+          {page === 'presets' && <PresetsPage />}
+          {page === 'trash' && <TrashPage />}
         </AppShell>
       )}
     </ToastProvider>

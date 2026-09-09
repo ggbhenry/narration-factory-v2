@@ -8,6 +8,7 @@ import {
   readAllVersions,
   recomputeCopyStateAfterDeletion,
   saveCopy,
+  softDeleteVersions,
 } from './_shared/destructive.js'
 import type { CopyRecord, NarrationVersion } from '../../src/types/index.js'
 
@@ -15,13 +16,15 @@ interface DeleteVersionsBody {
   copy_id: string
   version_ids?: string[]
   clear_all?: boolean
+  permanent?: boolean
 }
 
 /**
- * Exclui versões permanentemente (metadata + MP3) OU limpa todo o histórico.
- * Nunca mexe em next_version_number — a numeração jamais regride, então a
- * próxima geração continua de onde parou (ex: apagou tudo até V008 → V009).
- * A copy_original é sempre preservada.
+ * Exclusão de versões.
+ * - Padrão: SOFT DELETE (vai para a lixeira, MP3 preservado).
+ * - permanent:true: apaga metadata + MP3 de vez (usado pela Lixeira).
+ * Nunca mexe em next_version_number — a numeração jamais regride.
+ * clear_all limpa todo o histórico ativo (soft, salvo permanent:true).
  */
 export const handler: Handler = async (event) => {
   try {
@@ -39,35 +42,39 @@ export const handler: Handler = async (event) => {
 
     const allVersions = await readAllVersions(slug)
 
-    // Garante que o contador reflita o maior número já usado antes de apagar,
-    // para que a numeração futura nunca reutilize um número.
+    // Mantém o contador coerente com o maior número já usado.
     let maxSeen = typeof copy.next_version_number === 'number' ? copy.next_version_number : 0
     for (const v of allVersions) {
       const n = parseInt(v.version_id.replace(/^V/, ''), 10)
       if (Number.isFinite(n)) maxSeen = Math.max(maxSeen, n)
     }
     copy.next_version_number = maxSeen
+    await saveCopy(copy)
 
-    let toDelete: NarrationVersion[]
+    // Alvo: versões ATIVAS (não já na lixeira)
+    const active = allVersions.filter((v) => !v.deleted_at)
+    let targetIds: string[]
     if (payload.clear_all) {
-      toDelete = allVersions
+      targetIds = active.map((v) => v.version_id)
     } else {
       const idSet = new Set(payload.version_ids ?? [])
       if (idSet.size === 0) return badRequest('Nenhuma versão selecionada para exclusão.')
-      toDelete = allVersions.filter((v) => idSet.has(v.version_id))
+      targetIds = active.filter((v) => idSet.has(v.version_id)).map((v) => v.version_id)
     }
 
-    for (const v of toDelete) {
-      await deleteVersionPermanently(slug, v)
+    if (payload.permanent) {
+      const toDelete: NarrationVersion[] = allVersions.filter((v) => targetIds.includes(v.version_id))
+      for (const v of toDelete) {
+        await deleteVersionPermanently(slug, v)
+      }
+      const remaining = allVersions.filter((v) => !targetIds.includes(v.version_id) && !v.deleted_at)
+      recomputeCopyStateAfterDeletion(copy, remaining)
+      await saveCopy(copy)
+      return ok({ copy, deleted: targetIds, permanent: true })
     }
 
-    const deletedIds = new Set(toDelete.map((v) => v.version_id))
-    const remaining = allVersions.filter((v) => !deletedIds.has(v.version_id))
-
-    recomputeCopyStateAfterDeletion(copy, remaining)
-    await saveCopy(copy)
-
-    return ok({ copy, deleted: Array.from(deletedIds) })
+    const updated = await softDeleteVersions(payload.copy_id, targetIds)
+    return ok({ copy: updated ?? copy, deleted: targetIds, permanent: false })
   } catch (err) {
     return errorToResponse(err)
   }

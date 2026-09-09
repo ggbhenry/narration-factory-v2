@@ -41,7 +41,7 @@ export function PresetsPage() {
     setBusy(true)
     try {
       await apiPost('delete-preset', { ids })
-      showToast(`${ids.length} preset(s) excluído(s).`, 'success')
+      showToast(`${ids.length} preset(s) movido(s) para a lixeira.`, 'success')
       setSelectedIds(new Set())
       setConfirmDelete(null)
       await refresh()
@@ -125,7 +125,7 @@ export function PresetsPage() {
       {confirmDelete && (
         <ConfirmDialog
           title={`Excluir ${confirmDelete.length} preset${confirmDelete.length > 1 ? 's' : ''}?`}
-          message="Copies que usam esses presets ficarão sem preset e precisarão de um novo antes de gerar. Versões já geradas não são afetadas (cada uma guarda seu próprio snapshot)."
+          message="Os presets vão para a Lixeira (dá pra restaurar). Copies que os usam ficam sem preset e precisarão de um novo antes de gerar. Versões já geradas não são afetadas."
           confirmLabel={`Excluir ${confirmDelete.length}`}
           busy={busy}
           onConfirm={() => doDelete(confirmDelete)}

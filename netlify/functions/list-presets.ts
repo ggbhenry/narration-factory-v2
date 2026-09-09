@@ -12,11 +12,8 @@ export const handler: Handler = async (event) => {
     requireAppToken(event)
 
     const keys = await listBlobKeys('presets/')
-    const presets: VoicePreset[] = []
-    for (const key of keys) {
-      const preset = await getJSON<VoicePreset>(key)
-      if (preset) presets.push(preset)
-    }
+    const raw = await Promise.all(keys.map((key) => getJSON<VoicePreset>(key)))
+    const presets = raw.filter((p): p is VoicePreset => !!p && !p.deleted_at)
     presets.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
 
     return ok({ presets })

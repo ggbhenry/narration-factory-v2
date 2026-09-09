@@ -13,7 +13,7 @@ import { EditNarrationSheet } from '../components/EditNarrationSheet.js'
 import { ConfirmDialog } from '../components/ConfirmDialog.js'
 import { AssignPresetSheet } from '../components/AssignPresetSheet.js'
 import { useToast } from '../components/Toast.js'
-import type { CopyRecord } from '../types/index.js'
+import type { CopyRecord, NarrationVersion } from '../types/index.js'
 
 const GENERATABLE = new Set<CopyRecord['status']>(['IMPORTED', 'ERROR'])
 
@@ -23,7 +23,19 @@ type PendingConfirm =
   | null
 
 export function NarrationsPage() {
-  const { copies, latestVersions, loading, error, refresh } = useCopies()
+  const {
+    copies,
+    latestVersions,
+    loading,
+    error,
+    refresh,
+    patchCopy,
+    restoreCopy,
+    replaceCopy,
+    removeCopies,
+    addCopies,
+    setLatestVersion,
+  } = useCopies()
   const { presets } = usePresets()
   const { showToast } = useToast()
 
@@ -34,7 +46,6 @@ export function NarrationsPage() {
   const [editCopyId, setEditCopyId] = useState<string | null>(null)
   const [assignOpen, setAssignOpen] = useState(false)
   const [confirm, setConfirm] = useState<PendingConfirm>(null)
-  const [actionBusy, setActionBusy] = useState(false)
 
   const [queueOpen, setQueueOpen] = useState(false)
   const [queueBusy, setQueueBusy] = useState(false)
@@ -42,14 +53,21 @@ export function NarrationsPage() {
   const [queueErrors, setQueueErrors] = useState<Record<string, string>>({})
 
   const counts = useMemo(() => {
-    const c = { total: copies.length, revisar: 0, aprovadas: 0, erros: 0 }
+    const c = { total: copies.length, fila: 0, gerando: 0, revisar: 0, aprovadas: 0, erros: 0 }
     for (const copy of copies) {
-      if (copy.status === 'READY_FOR_REVIEW') c.revisar++
+      if (copy.status === 'QUEUED') c.fila++
+      else if (copy.status === 'GENERATING') c.gerando++
+      else if (copy.status === 'READY_FOR_REVIEW') c.revisar++
       else if (copy.status === 'READY_FOR_EDITING') c.aprovadas++
       else if (copy.status === 'ERROR') c.erros++
     }
     return c
   }, [copies])
+
+  const generatableCount = useMemo(
+    () => copies.filter((c) => GENERATABLE.has(c.status) && c.selected_preset_id).length,
+    [copies],
+  )
 
   const allSelected = copies.length > 0 && selectedIds.size === copies.length
 
@@ -84,33 +102,53 @@ export function NarrationsPage() {
       jobsByCopy.set(copy.copy_id, [copy.selected_preset_id as string])
     }
 
-    const initial: Record<string, CopyJobStatus> = {}
-    eligible.forEach((c) => (initial[c.copy_id] = 'queued'))
-    setQueueStatuses(initial)
-    setQueueErrors({})
+    setQueueStatuses((prev) => {
+      const next = { ...prev }
+      eligible.forEach((c) => (next[c.copy_id] = 'queued'))
+      return next
+    })
+    setQueueErrors((prev) => {
+      const next = { ...prev }
+      eligible.forEach((c) => delete next[c.copy_id])
+      return next
+    })
     setQueueOpen(true)
     setQueueBusy(true)
 
     await runGenerationQueue({
       jobsByCopy,
-      concurrency: 2,
+      concurrency: 3,
       onCopyStatus: (copyId, status, errorMessage) => {
         setQueueStatuses((prev) => ({ ...prev, [copyId]: status }))
-        if (status === 'error' && errorMessage) {
-          setQueueErrors((prev) => ({ ...prev, [copyId]: errorMessage }))
+        // Feedback imediato no card: reflete o estado da fila no status da copy.
+        if (status === 'generating') patchCopy(copyId, { status: 'GENERATING' })
+        if (status === 'error') {
+          patchCopy(copyId, { status: 'ERROR' })
+          if (errorMessage) setQueueErrors((prev) => ({ ...prev, [copyId]: errorMessage }))
         }
       },
       generateOne: async (copyId, presetId) => {
-        await apiPost('generate', { copy_id: copyId, preset_id: presetId || null })
+        // Atualiza só a copy envolvida assim que a ElevenLabs responde —
+        // a nova versão aparece na hora, sem reler a lista toda.
+        const res = await apiPost<{ copy: CopyRecord; version: NarrationVersion }>('generate', {
+          copy_id: copyId,
+          preset_id: presetId || null,
+        })
+        replaceCopy(res.copy)
+        setLatestVersion(res.copy.copy_id, res.version)
       },
     })
 
     setQueueBusy(false)
-    await refresh()
   }
 
   function handleGenerateSelected() {
     const targets = copies.filter((c) => selectedIds.has(c.copy_id) && GENERATABLE.has(c.status))
+    runBatch(targets)
+  }
+
+  function handleGenerateAll() {
+    const targets = copies.filter((c) => GENERATABLE.has(c.status))
     runBatch(targets)
   }
 
@@ -125,56 +163,64 @@ export function NarrationsPage() {
   }
 
   async function handleSelectPreset(copyId: string, presetId: string | null) {
+    // Atualização otimista: muda na tela imediatamente, persiste em background.
+    const previous = patchCopy(copyId, { selected_preset_id: presetId })
     try {
       await apiPost('select-preset', { copy_id: copyId, preset_id: presetId })
-      await refresh()
     } catch (err) {
+      if (previous) restoreCopy(previous)
       showToast(err instanceof Error ? err.message : 'Erro ao selecionar preset.', 'error')
     }
   }
 
   async function handleAssignPreset(presetId: string) {
-    setActionBusy(true)
+    const ids = Array.from(selectedIds)
+    // Otimista: aplica em memória a todas as selecionadas de uma vez.
+    const backups = new Map<string, CopyRecord>()
+    for (const id of ids) {
+      const prev = patchCopy(id, { selected_preset_id: presetId })
+      if (prev) backups.set(id, prev)
+    }
+    setAssignOpen(false)
+    showToast('Preset aplicado às copies selecionadas.', 'success')
     try {
-      await apiPost('assign-preset', { copy_ids: Array.from(selectedIds), preset_id: presetId })
-      showToast('Preset aplicado às copies selecionadas.', 'success')
-      setAssignOpen(false)
-      await refresh()
+      await apiPost('assign-preset', { copy_ids: ids, preset_id: presetId })
     } catch (err) {
+      backups.forEach((c) => restoreCopy(c))
       showToast(err instanceof Error ? err.message : 'Erro ao aplicar preset.', 'error')
-    } finally {
-      setActionBusy(false)
     }
   }
 
   async function doRemoveAudio(ids: string[]) {
-    setActionBusy(true)
+    const backups = new Map<string, CopyRecord>()
+    for (const id of ids) {
+      const prev = patchCopy(id, { status: 'IMPORTED', master_version_id: null })
+      if (prev) backups.set(id, prev)
+    }
+    setConfirm(null)
+    showToast('Áudio removido da área principal (histórico preservado).', 'success')
     try {
       for (const id of ids) {
         await apiPost('remove-audio', { copy_id: id })
       }
-      showToast('Áudio removido da área principal (histórico preservado).', 'success')
-      await refresh()
     } catch (err) {
+      backups.forEach((c) => restoreCopy(c))
       showToast(err instanceof Error ? err.message : 'Erro ao remover áudio.', 'error')
-    } finally {
-      setActionBusy(false)
-      setConfirm(null)
     }
   }
 
   async function doDeleteCopies(ids: string[]) {
-    setActionBusy(true)
+    // Otimista: some da tela na hora.
+    const backups = copies.filter((c) => ids.includes(c.copy_id))
+    removeCopies(ids)
+    clearSelection()
+    setConfirm(null)
+    showToast(`${ids.length} copy(ies) movida(s) para a lixeira.`, 'success')
     try {
       await apiPost('delete-copies', { copy_ids: ids })
-      showToast(`${ids.length} copy(ies) excluída(s).`, 'success')
-      clearSelection()
-      await refresh()
     } catch (err) {
+      addCopies(backups)
       showToast(err instanceof Error ? err.message : 'Erro ao excluir copies.', 'error')
-    } finally {
-      setActionBusy(false)
-      setConfirm(null)
     }
   }
 
@@ -192,10 +238,28 @@ export function NarrationsPage() {
 
       <div className="stat-strip">
         <Stat label="Total" value={counts.total} />
+        <Stat label="Na fila" value={counts.fila} />
+        <Stat label="Gerando" value={counts.gerando} tone={counts.gerando > 0 ? 'accent' : undefined} />
         <Stat label="Revisar" value={counts.revisar} tone="accent" />
         <Stat label="Aprovadas" value={counts.aprovadas} tone="success" />
         <Stat label="Erros" value={counts.erros} tone={counts.erros > 0 ? 'error' : undefined} />
       </div>
+
+      {!loading && copies.length > 0 && (
+        <div className="action-row">
+          <button type="button" className="btn btn--secondary" onClick={() => setImportOpen(true)}>
+            Importar copies
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={queueBusy || generatableCount === 0}
+            onClick={handleGenerateAll}
+          >
+            Gerar todas{generatableCount > 0 ? ` (${generatableCount})` : ''}
+          </button>
+        </div>
+      )}
 
       {loading && (
         <>
@@ -249,7 +313,7 @@ export function NarrationsPage() {
 
       <BatchToolbar
         selectedCount={selectedIds.size}
-        busy={queueBusy || actionBusy}
+        busy={queueBusy}
         onGenerate={handleGenerateSelected}
         onAssignPreset={() => setAssignOpen(true)}
         onRemoveAudio={() => setConfirm({ kind: 'remove-audio', ids: Array.from(selectedIds) })}
@@ -257,10 +321,24 @@ export function NarrationsPage() {
         onClear={clearSelection}
       />
 
-      {importOpen && <ImportCopiesSheet onClose={() => setImportOpen(false)} onImported={refresh} />}
+      {importOpen && (
+        <ImportCopiesSheet
+          presets={presets}
+          onClose={() => setImportOpen(false)}
+          onImported={(imported) => addCopies(imported)}
+        />
+      )}
 
       {queueOpen && (
-        <QueueProgress statuses={queueStatuses} errors={queueErrors} onClose={() => setQueueOpen(false)} />
+        <QueueProgress
+          statuses={queueStatuses}
+          errors={queueErrors}
+          onClose={() => setQueueOpen(false)}
+          onRetry={(copyId) => {
+            const copy = copies.find((c) => c.copy_id === copyId)
+            if (copy) runBatch([copy])
+          }}
+        />
       )}
 
       {reviewCopy && (
@@ -269,7 +347,10 @@ export function NarrationsPage() {
           presets={presets}
           initialTab={reviewTab}
           onClose={() => setReviewCopyId(null)}
-          onChanged={refresh}
+          onChanged={(updated) => {
+            if (updated) replaceCopy(updated)
+            else refresh()
+          }}
         />
       )}
 
@@ -290,7 +371,7 @@ export function NarrationsPage() {
         <AssignPresetSheet
           presets={presets}
           count={selectedIds.size}
-          busy={actionBusy}
+          
           onClose={() => setAssignOpen(false)}
           onApply={handleAssignPreset}
         />
@@ -299,9 +380,9 @@ export function NarrationsPage() {
       {confirm?.kind === 'delete-copies' && (
         <ConfirmDialog
           title={`Excluir ${confirm.ids.length} copy${confirm.ids.length > 1 ? 'ies' : ''}?`}
-          message="Isso apaga permanentemente a copy, todas as suas versões e áudios. Não pode ser desfeito."
+          message="A copy vai para a Lixeira com todas as suas versões e áudios. Você pode restaurar depois. A exclusão definitiva é feita dentro da Lixeira."
           confirmLabel={`Excluir ${confirm.ids.length}`}
-          busy={actionBusy}
+          
           onConfirm={() => doDeleteCopies(confirm.ids)}
           onCancel={() => setConfirm(null)}
         />
@@ -312,7 +393,7 @@ export function NarrationsPage() {
           message="A copy sai da área operacional, mas o histórico de versões e os áudios continuam preservados. Você pode gerar novamente depois."
           confirmLabel="Remover áudio"
           danger={false}
-          busy={actionBusy}
+          
           onConfirm={() => doRemoveAudio(confirm.ids)}
           onCancel={() => setConfirm(null)}
         />
